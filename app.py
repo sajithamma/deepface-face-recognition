@@ -87,6 +87,20 @@ def save_face_to_db(name, embedding_list, photo_path):
         """, (name, embedding_json, photo_path))
         conn.commit()
 
+def delete_face_from_db(name, photo_path):
+    """Delete a face from the database and remove the image file."""
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM known_faces WHERE name = ? AND photo_path = ?", (name, photo_path))
+        conn.commit()
+    
+    # Also delete the image file if it exists
+    if os.path.exists(photo_path):
+        try:
+            os.remove(photo_path)
+        except:
+            pass  # Ignore errors if file can't be deleted
+
 def compute_distance(embedding1, embedding2, distance_metric="cosine"):
     e1 = np.array(embedding1, dtype=np.float32)
     e2 = np.array(embedding2, dtype=np.float32)
@@ -245,7 +259,7 @@ def main():
         ["cosine", "euclidean", "euclidean_l2"],
         index=0
     )
-    threshold = st.sidebar.slider("Recognition Threshold", 0.0, 2.0, 0.40, 0.01)
+    threshold = st.sidebar.slider("Recognition Threshold", 0.0, 2.0, 0.47, 0.01)
 
     # Button: Add new face
     if st.sidebar.button("Add Face"):
@@ -283,6 +297,12 @@ def main():
             if "photo_path" in face_data:
                 txt += f"\n`{os.path.basename(face_data['photo_path'])}`"
             col2.write(txt)
+            
+            # Add delete button
+            if st.sidebar.button(f"Delete {face_data['name']}", key=f"delete_button_{i}"):
+                delete_face_from_db(face_data["name"], face_data["photo_path"])
+                st.session_state["known_faces"].remove(face_data)
+                st.sidebar.success(f"Deleted face for '{face_data['name']}'")
             
             st.sidebar.markdown("---")
 
