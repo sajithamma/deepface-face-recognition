@@ -181,7 +181,23 @@ def main():
 
     # Sidebar - Add new face
     st.sidebar.header("Add a New Face")
-    uploaded_face = st.sidebar.file_uploader("Upload Face", type=["jpg", "png", "jpeg"])
+    
+    # Input method selection for adding faces
+    add_input_method = st.sidebar.radio("Choose input method:", ["Upload Image", "Take Photo"])
+    
+    if add_input_method == "Upload Image":
+        uploaded_face = st.sidebar.file_uploader("Upload Face", type=["jpg", "png", "jpeg"])
+        face_image = None
+        if uploaded_face:
+            face_image = Image.open(uploaded_face)
+            st.sidebar.image(face_image, caption="Uploaded Face", width=200)
+    else:  # Take Photo
+        camera_photo = st.sidebar.camera_input("Take a photo of the face")
+        face_image = None
+        if camera_photo:
+            face_image = Image.open(camera_photo)
+            st.sidebar.image(face_image, caption="Captured Face", width=200)
+    
     new_face_name = st.sidebar.text_input("Name for the Face", "")
 
     # Sidebar - DeepFace Config
@@ -201,14 +217,13 @@ def main():
         ["cosine", "euclidean", "euclidean_l2"],
         index=0
     )
-    threshold = st.sidebar.slider("Recognition Threshold", 0.0, 2.0, 0.25, 0.01)
+    threshold = st.sidebar.slider("Recognition Threshold", 0.0, 2.0, 0.40, 0.01)
 
     # Button: Add new face
     if st.sidebar.button("Add Face"):
-        if uploaded_face and new_face_name.strip():
-            pil_image = Image.open(uploaded_face)
+        if face_image and new_face_name.strip():
             # Compute embedding + store on disk
-            record = add_new_face(new_face_name.strip(), pil_image, model_name, detector_backend)
+            record = add_new_face(new_face_name.strip(), face_image, model_name, detector_backend)
             # Save to DB
             save_face_to_db(record["name"], record["embedding"], record["photo_path"])
             # Also add to session_state
@@ -230,25 +245,36 @@ def main():
 
     # Main - Upload image for recognition
     st.subheader("Face Recognition on Uploaded Photo")
-    recognition_img = st.file_uploader("Upload an image (single or group)", type=["jpg", "jpeg", "png"])
+    
+    # Input method selection for recognition
+    recognition_input_method = st.radio("Choose input method for recognition:", ["Upload Image", "Take Photo"])
+    
+    if recognition_input_method == "Upload Image":
+        recognition_img = st.file_uploader("Upload an image (single or group)", type=["jpg", "jpeg", "png"])
+        input_image = None
+        if recognition_img:
+            input_image = Image.open(recognition_img)
+            st.image(input_image, caption="Original Image", use_container_width=True)
+    else:  # Take Photo
+        recognition_camera = st.camera_input("Take a photo for recognition")
+        input_image = None
+        if recognition_camera:
+            input_image = Image.open(recognition_camera)
+            st.image(input_image, caption="Captured Image", use_container_width=True)
 
-    if recognition_img:
-        input_image = Image.open(recognition_img)
-        st.image(input_image, caption="Original Image", use_container_width=True)
-
-        if st.button("Detect and Recognize Faces"):
-            if len(st.session_state["known_faces"]) == 0:
-                st.warning("No registered faces. Please add faces in the sidebar first.")
-            else:
-                annotated = detect_and_draw_faces(
-                    input_image, 
-                    st.session_state["known_faces"],
-                    model_name,
-                    detector_backend,
-                    distance_metric,
-                    threshold
-                )
-                st.image(annotated, caption="Detected Faces", use_container_width=True)
+    if input_image and st.button("Detect and Recognize Faces"):
+        if len(st.session_state["known_faces"]) == 0:
+            st.warning("No registered faces. Please add faces in the sidebar first.")
+        else:
+            annotated = detect_and_draw_faces(
+                input_image, 
+                st.session_state["known_faces"],
+                model_name,
+                detector_backend,
+                distance_metric,
+                threshold
+            )
+            st.image(annotated, caption="Detected Faces", use_container_width=True)
 
 if __name__ == "__main__":
     main()
