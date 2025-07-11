@@ -276,9 +276,25 @@ def main():
 
     # Sidebar - List known faces
     st.sidebar.header("Registered Faces")
+    
+    # Debug: Show database state
+    with st.sidebar.expander("🔧 Debug Info", expanded=False):
+        db_faces = load_known_faces_from_db()
+        st.write(f"Database faces: {len(db_faces)}")
+        st.write(f"Session faces: {len(st.session_state['known_faces'])}")
+        for db_face in db_faces:
+            st.write(f"- {db_face['name']}: {db_face.get('photo_path', 'No path')}")
+        
+        # Manual refresh button
+        if st.button("🔄 Refresh from Database"):
+            st.session_state["known_faces"] = load_known_faces_from_db()
+            st.success("Refreshed from database!")
+            st.rerun()
+    
     if len(st.session_state["known_faces"]) == 0:
         st.sidebar.write("No faces registered yet.")
     else:
+        st.sidebar.write(f"Total registered faces: {len(st.session_state['known_faces'])}")
         for i, face_data in enumerate(st.session_state["known_faces"]):
             col1, col2 = st.sidebar.columns([1, 3])
             
@@ -287,10 +303,13 @@ def main():
                 try:
                     face_img = Image.open(face_data["photo_path"])
                     col1.image(face_img, width=60)
-                except:
+                except Exception as e:
                     col1.write("📷")
+                    st.sidebar.error(f"Error loading image: {str(e)}")
             else:
                 col1.write("📷")
+                if "photo_path" in face_data:
+                    st.sidebar.warning(f"File not found: {face_data['photo_path']}")
             
             # Display name and filename
             txt = f"**{face_data['name']}**"
@@ -337,6 +356,11 @@ def main():
                 distance_metric,
                 threshold
             )
+            # Store detection results in session state
+            st.session_state["last_detection_results"] = detection_results
+            st.session_state["last_annotated_image"] = annotated
+            st.session_state["last_input_image"] = input_image
+            
             st.image(annotated, caption="Detected Faces", use_container_width=True)
             
             # Display detailed JSON report
@@ -382,6 +406,153 @@ def main():
                         for match in top_matches:
                             st.write(f"  • {match['name']}: {match['distance']:.4f}")
                         st.write("---")
+            
+            # Handle unknown faces - Add them to database option
+            unknown_faces = [result for result in detection_results if result["recognized_name"] == "Unknown"]
+            
+            if unknown_faces:
+                st.subheader("🆕 Unknown Faces Detected")
+                st.write(f"Found {len(unknown_faces)} unknown face(s). You can add them to the database:")
+                
+                for i, unknown_face in enumerate(unknown_faces):
+                    with st.expander(f"Unknown Face {unknown_face['face_id']} - Add to Database", expanded=True):
+                        col1, col2 = st.columns([1, 2])
+                        
+                        # Extract the face crop from the original image
+                        facial_area = unknown_face["facial_area"]
+                        x, y, w, h = facial_area["x"], facial_area["y"], facial_area["w"], facial_area["h"]
+                        
+                        # Convert input image to numpy array if needed
+                        if isinstance(input_image, Image.Image):
+                            img_array = np.array(input_image)
+                        else:
+                            img_array = input_image
+                        
+                        # Crop the face from the original image
+                        face_crop = img_array[y:y+h, x:x+w]
+                        face_pil = Image.fromarray(face_crop)
+                        
+                        with col1:
+                            st.image(face_pil, caption=f"Unknown Face {unknown_face['face_id']}", width=150)
+                        
+                        with col2:
+                            new_name = st.text_input(f"Enter name for Unknown Face {unknown_face['face_id']}:", 
+                                                   key=f"unknown_name_{i}")
+                            
+                            if st.button(f"Add Unknown Face {unknown_face['face_id']} to Database", 
+                                       key=f"add_unknown_{i}"):
+                                if new_name.strip():
+                                    try:
+                                        # Add the unknown face to database
+                                        record = add_new_face(new_name.strip(), face_pil, model_name, detector_backend)
+                                        save_face_to_db(record["name"], record["embedding"], record["photo_path"])
+                                        st.session_state["known_faces"].append(record)
+                                        st.success(f"✅ Added '{new_name}' to database!")
+                                        st.info(f"Debug: Face added with {len(record['embedding'])} embeddings")
+                                        # Don't rerun - just update the session state
+                                    except Exception as e:
+                                        st.error(f"Error adding face: {str(e)}")
+                                        st.error("Please try again or check the image quality.")
+                                else:
+                                    st.error("Please enter a name for this face.")
+                        
+                        # Show detection details for this unknown face
+                        st.write("**Detection Details:**")
+                        st.write(f"- Confidence: {unknown_face['confidence']}")
+                        st.write(f"- Facial Area: x={x}, y={y}, w={w}, h={h}")
+                        if unknown_face["all_matches"]:
+                            st.write("**Closest Known Matches:**")
+                            for j, match in enumerate(unknown_face["all_matches"][:3]):
+                                st.write(f"  {j+1}. {match['name']}: {match['distance']:.4f}")
+                        st.write("---")
+
+    # Display previous detection results if available (after page refresh)
+    elif "last_detection_results" in st.session_state and st.session_state["last_detection_results"]:
+        st.subheader("Previous Detection Results")
+        st.write("Showing results from your last detection:")
+        
+        # Show the annotated image
+        if "last_annotated_image" in st.session_state:
+            st.image(st.session_state["last_annotated_image"], caption="Detected Faces", use_container_width=True)
+        
+        # Show unknown faces section again
+        detection_results = st.session_state["last_detection_results"]
+        unknown_faces = [result for result in detection_results if result["recognized_name"] == "Unknown"]
+        
+        if unknown_faces:
+            st.subheader("🆕 Unknown Faces Detected")
+            st.write(f"Found {len(unknown_faces)} unknown face(s). You can add them to the database:")
+            
+            for i, unknown_face in enumerate(unknown_faces):
+                with st.expander(f"Unknown Face {unknown_face['face_id']} - Add to Database", expanded=True):
+                    col1, col2 = st.columns([1, 2])
+                    
+                    # Extract the face crop from the stored input image
+                    facial_area = unknown_face["facial_area"]
+                    x, y, w, h = facial_area["x"], facial_area["y"], facial_area["w"], facial_area["h"]
+                    
+                    if "last_input_image" in st.session_state:
+                        input_image = st.session_state["last_input_image"]
+                        # Convert input image to numpy array if needed
+                        if isinstance(input_image, Image.Image):
+                            img_array = np.array(input_image)
+                        else:
+                            img_array = input_image
+                        
+                        # Crop the face from the original image
+                        face_crop = img_array[y:y+h, x:x+w]
+                        face_pil = Image.fromarray(face_crop)
+                        
+                        with col1:
+                            st.image(face_pil, caption=f"Unknown Face {unknown_face['face_id']}", width=150)
+                        
+                        with col2:
+                            new_name = st.text_input(f"Enter name for Unknown Face {unknown_face['face_id']}:", 
+                                                   key=f"unknown_name_prev_{i}")
+                            
+                            if st.button(f"Add Unknown Face {unknown_face['face_id']} to Database", 
+                                       key=f"add_unknown_prev_{i}"):
+                                if new_name.strip():
+                                    try:
+                                        # Add the unknown face to database
+                                        record = add_new_face(new_name.strip(), face_pil, model_name, detector_backend)
+                                        save_face_to_db(record["name"], record["embedding"], record["photo_path"])
+                                        st.session_state["known_faces"].append(record)
+                                        st.success(f"✅ Added '{new_name}' to database!")
+                                        st.info(f"Debug: Face added with {len(record['embedding'])} embeddings")
+                                        # Clear the stored detection results after successful addition
+                                        if "last_detection_results" in st.session_state:
+                                            del st.session_state["last_detection_results"]
+                                        if "last_annotated_image" in st.session_state:
+                                            del st.session_state["last_annotated_image"]
+                                        if "last_input_image" in st.session_state:
+                                            del st.session_state["last_input_image"]
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Error adding face: {str(e)}")
+                                        st.error("Please try again or check the image quality.")
+                                else:
+                                    st.error("Please enter a name for this face.")
+                        
+                        # Show detection details for this unknown face
+                        st.write("**Detection Details:**")
+                        st.write(f"- Confidence: {unknown_face['confidence']}")
+                        st.write(f"- Facial Area: x={x}, y={y}, w={w}, h={h}")
+                        if unknown_face["all_matches"]:
+                            st.write("**Closest Known Matches:**")
+                            for j, match in enumerate(unknown_face["all_matches"][:3]):
+                                st.write(f"  {j+1}. {match['name']}: {match['distance']:.4f}")
+                        st.write("---")
+        
+        # Add a button to clear previous results
+        if st.button("Clear Previous Results"):
+            if "last_detection_results" in st.session_state:
+                del st.session_state["last_detection_results"]
+            if "last_annotated_image" in st.session_state:
+                del st.session_state["last_annotated_image"]
+            if "last_input_image" in st.session_state:
+                del st.session_state["last_input_image"]
+            st.rerun()
 
 if __name__ == "__main__":
     main()
