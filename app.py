@@ -123,7 +123,9 @@ def detect_and_draw_faces(
         enforce_detection=False
     )
 
-    for detection in detections:
+    detection_results = []
+    
+    for i, detection in enumerate(detections):
         facial_area = detection["facial_area"]
         x, y, w, h = facial_area["x"], facial_area["y"], facial_area["w"], facial_area["h"]
         face_crop = detection["face"]
@@ -136,8 +138,18 @@ def detect_and_draw_faces(
             enforce_detection=False
         )
 
+        detection_result = {
+            "face_id": i + 1,
+            "facial_area": facial_area,
+            "confidence": detection.get("confidence", "N/A"),
+            "recognized_name": "Unknown",
+            "min_distance": float("inf"),
+            "all_matches": []
+        }
+
         if len(face_embed) == 0:
-            recognized_name = "Unknown"
+            detection_result["recognized_name"] = "Unknown"
+            detection_result["min_distance"] = float("inf")
         else:
             current_embedding = face_embed[0]["embedding"]
             recognized_name = "Unknown"
@@ -151,21 +163,37 @@ def detect_and_draw_faces(
 
                 known_vector = known_embedding[0]["embedding"]
                 dist = compute_distance(current_embedding, known_vector, distance_metric)
+                
+                # Add to all matches
+                detection_result["all_matches"].append({
+                    "name": known_name,
+                    "distance": float(dist),
+                    "photo_path": known.get("photo_path", "N/A")
+                })
+                
                 if dist < min_dist:
                     min_dist = dist
                     recognized_name = known_name
 
+            detection_result["recognized_name"] = recognized_name
+            detection_result["min_distance"] = float(min_dist)
+
             if min_dist > threshold:
-                recognized_name = "Unknown"
+                detection_result["recognized_name"] = "Unknown"
+
+        # Sort all matches by distance
+        detection_result["all_matches"].sort(key=lambda x: x["distance"])
 
         cv2.rectangle(bgr_image, (x, y), (x+w, y+h), (0,255,0), 2)
         cv2.putText(
-            bgr_image, recognized_name, (x, y-10),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2
+            bgr_image, f"{detection_result['recognized_name']} ({detection_result['min_distance']:.3f})", 
+            (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2
         )
+        
+        detection_results.append(detection_result)
 
     annotated_image = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
-    return annotated_image
+    return annotated_image, detection_results
 
 def main():
     st.title("Face Recognition with Persistence (SQLite + Local Images)")
@@ -238,10 +266,25 @@ def main():
         st.sidebar.write("No faces registered yet.")
     else:
         for i, face_data in enumerate(st.session_state["known_faces"]):
-            txt = f"{i+1}. {face_data['name']}"
+            col1, col2 = st.sidebar.columns([1, 3])
+            
+            # Display the face image if available
+            if "photo_path" in face_data and os.path.exists(face_data["photo_path"]):
+                try:
+                    face_img = Image.open(face_data["photo_path"])
+                    col1.image(face_img, width=60)
+                except:
+                    col1.write("📷")
+            else:
+                col1.write("📷")
+            
+            # Display name and filename
+            txt = f"**{face_data['name']}**"
             if "photo_path" in face_data:
-                txt += f" (photo: {os.path.basename(face_data['photo_path'])})"
-            st.sidebar.write(txt)
+                txt += f"\n`{os.path.basename(face_data['photo_path'])}`"
+            col2.write(txt)
+            
+            st.sidebar.markdown("---")
 
     # Main - Upload image for recognition
     st.subheader("Face Recognition on Uploaded Photo")
@@ -266,7 +309,7 @@ def main():
         if len(st.session_state["known_faces"]) == 0:
             st.warning("No registered faces. Please add faces in the sidebar first.")
         else:
-            annotated = detect_and_draw_faces(
+            annotated, detection_results = detect_and_draw_faces(
                 input_image, 
                 st.session_state["known_faces"],
                 model_name,
@@ -275,6 +318,50 @@ def main():
                 threshold
             )
             st.image(annotated, caption="Detected Faces", use_container_width=True)
+            
+            # Display detailed JSON report
+            st.subheader("Detailed Detection Report")
+            
+            # Create a comprehensive report
+            full_report = {
+                "detection_summary": {
+                    "total_faces_detected": len(detection_results),
+                    "model_used": model_name,
+                    "detector_backend": detector_backend,
+                    "distance_metric": distance_metric,
+                    "threshold": threshold,
+                    "timestamp": datetime.now().isoformat()
+                },
+                "face_detections": detection_results
+            }
+            
+            # Display as expandable JSON
+            with st.expander("📊 View Complete Detection Report (JSON)", expanded=True):
+                st.json(full_report)
+            
+            # Display summary table
+            st.subheader("Detection Summary")
+            if detection_results:
+                summary_data = []
+                for result in detection_results:
+                    summary_data.append({
+                        "Face ID": result["face_id"],
+                        "Recognized As": result["recognized_name"],
+                        "Min Distance": f"{result['min_distance']:.4f}",
+                        "Confidence": result["confidence"],
+                        "Total Matches": len(result["all_matches"])
+                    })
+                
+                st.table(summary_data)
+                
+                # Show top matches for each face
+                for result in detection_results:
+                    if result["all_matches"]:
+                        st.write(f"**Face {result['face_id']} - Top 3 Matches:**")
+                        top_matches = result["all_matches"][:3]
+                        for match in top_matches:
+                            st.write(f"  • {match['name']}: {match['distance']:.4f}")
+                        st.write("---")
 
 if __name__ == "__main__":
     main()
